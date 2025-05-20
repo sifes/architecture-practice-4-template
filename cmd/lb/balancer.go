@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/sifes/architecture-practice-4-template/httptools"
@@ -28,6 +31,8 @@ var (
 		"server2:8080",
 		"server3:8080",
 	}
+	healthyServers = make([]bool, len(serversPool))
+	mut             sync.Mutex
 )
 
 func scheme() string {
@@ -84,22 +89,60 @@ func forward(dst string, rw http.ResponseWriter, r *http.Request) error {
 	}
 }
 
-func main() {
-	flag.Parse()
+func doHash(input string) uint32 {
+	hasher := sha256.New()
+	hasher.Write([]byte(input))
+	return binary.BigEndian.Uint32(hasher.Sum(nil))
+}
 
-	// TODO: Використовуйте дані про стан сервера, щоб підтримувати список тих серверів, яким можна відправляти запит.
-	for _, server := range serversPool {
-		server := server
+func updateHealthyServers() {
+	for idx, address := range serversPool {
+		srv := address
+		index := idx
 		go func() {
 			for range time.Tick(10 * time.Second) {
-				log.Println(server, "healthy:", health(server))
+				mut.Lock()
+				healthyServers[index] = health(srv)
+				mut.Unlock()
 			}
 		}()
 	}
+}
+
+func chooseServer(uriPath string) string {
+	mut.Lock()
+	defer mut.Unlock()
+
+	idx := doHash(uriPath) % uint32(len(serversPool))
+
+	startIdx := idx
+	for !healthyServers[idx] {
+		idx = (idx + 1) % uint32(len(serversPool))
+		if idx == startIdx {
+			return ""
+		}
+	}
+
+	return serversPool[idx]
+}
+
+func main() {
+	flag.Parse()
+
+	updateHealthyServers()
 
 	frontend := httptools.CreateServer(*port, http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		// TODO: Реалізуйте свій алгоритм балансувальника.
-		forward(serversPool[0], rw, r)
+		server := chooseServer(r.URL.Path)
+		if server == "" {
+			http.Error(rw, "No healthy servers available", http.StatusServiceUnavailable)
+			return
+
+		}
+
+		err := forward(server, rw, r)
+		if err != nil {
+			log.Printf("Failed to forward request: %s", err)
+		}
 	}))
 
 	log.Println("Starting load balancer...")

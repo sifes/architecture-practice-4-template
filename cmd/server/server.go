@@ -48,6 +48,52 @@ func main() {
 		})
 	})
 
+	// additional links for testing different servers
+	h.HandleFunc("/api/v1/some-data-check1", func(rw http.ResponseWriter, r *http.Request) {
+		respDelayString := os.Getenv(confResponseDelaySec)
+		if delaySec, parseErr := strconv.Atoi(respDelayString); parseErr == nil && delaySec > 0 && delaySec < 300 {
+			time.Sleep(time.Duration(delaySec) * time.Second)
+		}
+
+		report.Process(r)
+
+		rw.Header().Set("content-type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(rw).Encode([]string{
+			"2", "3",
+		})
+	})
+
+	h.HandleFunc("/api/v1/some-data-check2", func(rw http.ResponseWriter, r *http.Request) {
+		respDelayString := os.Getenv(confResponseDelaySec)
+		if delaySec, parseErr := strconv.Atoi(respDelayString); parseErr == nil && delaySec > 0 && delaySec < 300 {
+			time.Sleep(time.Duration(delaySec) * time.Second)
+		}
+
+		report.Process(r)
+
+		rw.Header().Set("content-type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(rw).Encode([]string{
+			"3", "4",
+		})
+	})
+
+	h.HandleFunc("/api/v1/some-data-check3", func(rw http.ResponseWriter, r *http.Request) {
+		respDelayString := os.Getenv(confResponseDelaySec)
+		if delaySec, parseErr := strconv.Atoi(respDelayString); parseErr == nil && delaySec > 0 && delaySec < 300 {
+			time.Sleep(time.Duration(delaySec) * time.Second)
+		}
+
+		report.Process(r)
+
+		rw.Header().Set("content-type", "application/json")
+		rw.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(rw).Encode([]string{
+			"4", "5",
+		})
+	})
+
 	h.Handle("/report", report)
 
 	server := httptools.CreateServer(*port, h)
