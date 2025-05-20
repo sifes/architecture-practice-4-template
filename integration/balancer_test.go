@@ -21,6 +21,13 @@ func TestBalancer(t *testing.T) {
 		t.Skip("Integration test is not enabled")
 	}
 
+	// First, verify all servers are healthy
+	for i := 0; i < len(serversPool); i++ {
+		if !health(serversPool[i]) {
+			t.Fatalf("Server %s is not healthy at test start", serversPool[i])
+		}
+	}
+
 	endpoints := []string{
 		"/api/v1/some-data",
 		"/api/v1/some-data-check1",
@@ -119,66 +126,62 @@ func TestConsistentHashingOfBalancer(t *testing.T) {
 	}
 }
 
-func TestParallelRequests(t *testing.T) {
+func TestURLStickyRouting(t *testing.T) {
 	if _, exists := os.LookupEnv("INTEGRATION_TEST"); !exists {
 		t.Skip("Integration test is not enabled")
 	}
 
-	const concurrentRequests = 50
-	results := make(chan string, concurrentRequests)
+	const (
+		testURL         = "/api/v1/some-data?key=test123"
+		parallelRequests = 20                            
+	)
+
+	results := make(chan string, parallelRequests)
 	var wg sync.WaitGroup
 
-	wg.Add(concurrentRequests)
-	for i := 0; i < concurrentRequests; i++ {
+	wg.Add(parallelRequests)
+	for i := 0; i < parallelRequests; i++ {
 		go func(id int) {
 			defer wg.Done()
 
-			endpoint := fmt.Sprintf("/api/v1/some-data?id=%d", id%4)
-			url := fmt.Sprintf("%s%s", baseAddress, endpoint)
-
-			resp, err := client.Get(url)
+			resp, err := client.Get(baseAddress + testURL)
 			if err != nil {
 				t.Errorf("Request %d failed: %v", id, err)
-				results <- "error"
 				return
 			}
+			defer resp.Body.Close()
 
-			serverFrom := resp.Header.Get("lb-from")
-			if serverFrom == "" {
+			server := resp.Header.Get("lb-from")
+			if server == "" {
 				t.Errorf("Request %d: no lb-from header", id)
-				results <- "no-header"
-			} else {
-				results <- serverFrom
+				return
 			}
-
-			resp.Body.Close()
+			results <- server
 		}(i)
 	}
 
 	wg.Wait()
 	close(results)
 
-	serverCounts := make(map[string]int)
+	uniqueServers := make(map[string]struct{})
 	for server := range results {
-		if server != "error" && server != "no-header" {
-			serverCounts[server]++
-		}
+		uniqueServers[server] = struct{}{}
 	}
 
-	t.Logf("Distribution of %d requests:", concurrentRequests)
-	for server, count := range serverCounts {
-		t.Logf("  %s: %d requests (%.1f%%)",
-			server, count, float64(count)*100/float64(concurrentRequests))
+	if len(uniqueServers) != 1 {
+		t.Errorf("Expected all requests to go to same server, got %d different servers: %v", 
+			len(uniqueServers), uniqueServers)
+	} else {
+		t.Logf("All %d requests for '%s' went to server: %s", 
+			parallelRequests, testURL, getFirstKey(uniqueServers))
 	}
+}
 
-	expectedServers := []string{"server1:8080", "server2:8080", "server3:8080"}
-	for _, server := range expectedServers {
-		if count, exists := serverCounts[server]; !exists {
-			t.Errorf("Server %s was not used", server)
-		} else if count == 0 {
-			t.Errorf("Server %s received 0 requests", server)
-		}
+func getFirstKey(m map[string]struct{}) string {
+	for k := range m {
+		return k
 	}
+	return ""
 }
 
 func BenchmarkBalancer(b *testing.B) {
@@ -248,4 +251,20 @@ func BenchmarkBalancer(b *testing.B) {
 		b.Logf("Server %s handled %d requests (%.2f%%)",
 			server, serverCounts[server], percentage)
 	}
+}
+
+// health checks if a server is healthy
+func health(server string) bool {
+	resp, err := client.Get(fmt.Sprintf("http://%s/health", server))
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+var serversPool = []string{
+	"server1:8080",
+	"server2:8080",
+	"server3:8080",
 }
